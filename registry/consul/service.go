@@ -25,9 +25,6 @@ func watchServices(client *api.Client, tagPrefix string, status []string, config
 			time.Sleep(time.Second)
 			continue
 		}
-
-		log.Printf("[INFO] consul: Health changed to #%d", meta.LastIndex)
-		config <- servicesConfig(client, passingServices(checks, status), tagPrefix)
 		for _, check := range checks {
 			all_checks = append(all_checks, check)
 		}
