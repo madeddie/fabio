@@ -13,11 +13,12 @@ import (
 
 // watchServices monitors the consul health checks and creates a new configuration
 // on every change.
-func watchServices(client *api.Client, tagPrefix string, status []string, config chan string) {
+func watchServices(client *api.Client, tagPrefix string, status []string, config chan string, dcIndex int, datacenters []string) {
 	var lastIndex uint64
 
 	for {
-		q := &api.QueryOptions{RequireConsistent: true, WaitIndex: lastIndex}
+		var all_checks []*api.HealthCheck
+		q := &api.QueryOptions{RequireConsistent: true, WaitIndex: lastIndex, Datacenter: datacenters[dcIndex]}
 		checks, meta, err := client.Health().State("any", q)
 		if err != nil {
 			log.Printf("[WARN] consul: Error fetching health state. %v", err)
@@ -27,7 +28,28 @@ func watchServices(client *api.Client, tagPrefix string, status []string, config
 
 		log.Printf("[INFO] consul: Health changed to #%d", meta.LastIndex)
 		config <- servicesConfig(client, passingServices(checks, status), tagPrefix)
+		for _, check := range checks {
+			all_checks = append(all_checks, check)
+		}
+		log.Printf("[WARN] consul: Health changed to #%d", meta.LastIndex)
 		lastIndex = meta.LastIndex
+		for i, dc := range datacenters {
+			if i == dcIndex {
+				continue
+			}
+
+			q := &api.QueryOptions{RequireConsistent: true, Datacenter: dc}
+			checks, _, err := client.Health().State("any", q)
+			if err != nil {
+				log.Printf("[WARN] consul: Error fetching health state. %v", err)
+				time.Sleep(time.Second)
+				continue
+			}
+			for _, check := range checks {
+				all_checks = append(all_checks, check)
+			}
+		}
+		config <- servicesConfig(client, passingServices(all_checks, status), tagPrefix)
 	}
 }
 
@@ -63,45 +85,47 @@ func serviceConfig(client *api.Client, name string, passing map[string]bool, tag
 		return nil
 	}
 
-	dc, err := datacenter(client)
+	datacenters, err := client.Catalog().Datacenters()
 	if err != nil {
-		log.Printf("[WARN] consul: Error getting datacenter. %s", err)
+		log.Printf("[WARN] consul: Error getting datacenters. %s", err)
 		return nil
 	}
 
-	q := &api.QueryOptions{RequireConsistent: true}
-	svcs, _, err := client.Catalog().Service(name, "", q)
-	if err != nil {
-		log.Printf("[WARN] consul: Error getting catalog service %s. %v", name, err)
-		return nil
-	}
-
-	env := map[string]string{
-		"DC": dc,
-	}
-
-	for _, svc := range svcs {
-		// check if the instance is in the list of instances
-		// which passed the health check
-		if _, ok := passing[svc.ServiceID]; !ok {
-			continue
+	for _, dc := range datacenters {
+		q := &api.QueryOptions{RequireConsistent: true, Datacenter: dc}
+		svcs, _, err := client.Catalog().Service(name, "", q)
+		if err != nil {
+			log.Printf("[WARN] consul: Error getting catalog service %s. %v", name, err)
+			return nil
 		}
 
-		for _, tag := range svc.ServiceTags {
-			if host, path, ok := parseURLPrefixTag(tag, tagPrefix, env); ok {
-				name, addr, port := svc.ServiceName, svc.ServiceAddress, svc.ServicePort
+		env := map[string]string{
+			"DC": dc,
+		}
 
-				// use consul node address if service address is not set
-				if addr == "" {
-					addr = svc.Address
+		for _, svc := range svcs {
+			// check if the instance is in the list of instances
+			// which passed the health check
+			if _, ok := passing[svc.ServiceID]; !ok {
+				continue
+			}
+
+			for _, tag := range svc.ServiceTags {
+				if host, path, ok := parseURLPrefixTag(tag, tagPrefix, env); ok {
+					name, addr, port := svc.ServiceName, svc.ServiceAddress, svc.ServicePort
+
+					// use consul node address if service address is not set
+					if addr == "" {
+						addr = svc.Address
+					}
+
+					// add .local suffix on OSX for simple host names w/o domain
+					if runtime.GOOS == "darwin" && !strings.Contains(addr, ".") && !strings.HasSuffix(addr, ".local") {
+						addr += ".local"
+					}
+
+					config = append(config, fmt.Sprintf("route add %s %s%s http://%s:%d/ tags %q", name, host, path, addr, port, strings.Join(svc.ServiceTags, ",")))
 				}
-
-				// add .local suffix on OSX for simple host names w/o domain
-				if runtime.GOOS == "darwin" && !strings.Contains(addr, ".") && !strings.HasSuffix(addr, ".local") {
-					addr += ".local"
-				}
-
-				config = append(config, fmt.Sprintf("route add %s %s%s http://%s:%d/ tags %q", name, host, path, addr, port, strings.Join(svc.ServiceTags, ",")))
 			}
 		}
 	}
