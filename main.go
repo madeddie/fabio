@@ -16,10 +16,10 @@ import (
 	"github.com/eBay/fabio/metrics"
 	"github.com/eBay/fabio/proxy"
 	"github.com/eBay/fabio/registry"
-	"github.com/eBay/fabio/registry/consul"
 	"github.com/eBay/fabio/registry/file"
 	"github.com/eBay/fabio/registry/static"
 	"github.com/eBay/fabio/route"
+	"github.com/madeddie/fabio/registry/consul"
 )
 
 // version contains the version number
@@ -30,7 +30,7 @@ import (
 // It is also set by the linker when fabio
 // is built via the Makefile or the build/docker.sh
 // script to ensure the correct version nubmer
-var version = "1.2"
+var version = "1.2-lgi-fork"
 
 func main() {
 	cfg, err := config.Load()

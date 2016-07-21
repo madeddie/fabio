@@ -80,7 +80,13 @@ func (b *be) WatchServices() chan string {
 	log.Printf("[INFO] consul: Using tag prefix %q", b.cfg.TagPrefix)
 
 	svc := make(chan string)
-	go watchServices(b.c, b.cfg.TagPrefix, b.cfg.ServiceStatus, svc)
+	datacenters, err := b.c.Catalog().Datacenters()
+	if err != nil {
+		log.Printf("[WARN] consul: Error fetching datacenters. %v", err)
+	}
+	for dcIndex, _ := range datacenters {
+		go watchServices(b.c, b.cfg.TagPrefix, b.cfg.ServiceStatus, svc, dcIndex, datacenters)
+	}
 	return svc
 }
 
